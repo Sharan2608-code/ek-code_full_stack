@@ -38,112 +38,114 @@ A full-stack Next.js application with Supabase backend for managing ticket pools
    npm install
    # or
    pnpm install
-   \`\`\`
 
-3. **Set up environment variables**
-   \`\`\`bash
-   cp .env.example .env.local
-   \`\`\`
-   Fill in your Supabase credentials in `.env.local`
+Create a `.env` file at the project root (same level as `package.json`):
 
-4. **Set up the database**
-   
-   Run the SQL scripts in order in your Supabase SQL editor:
-   \`\`\`bash
-   scripts/001_create_admin_users.sql
-   scripts/002_create_users.sql
-   scripts/003_create_ticket_pools.sql
-   scripts/004_create_activity_history.sql
-   scripts/005_seed_initial_data.sql
-   scripts/006_create_functions.sql
-   \`\`\`
+```
+MONGODB_URI=mongodb://127.0.0.1:27017/ekcode
+# Optional
+# MONGODB_DB=ekcode
+```
 
-5. **Start the development server**
-   \`\`\`bash
-   npm run dev
-   # or
-   pnpm dev
-   \`\`\`
+### Development
 
-6. **Open your browser**
-   Navigate to [http://localhost:3000](http://localhost:3000)
+In one terminal, start the API server:
 
-## Default Credentials
+```bash
+pnpm dev:server
+```
 
-After running the seed script, you can log in with:
+In another terminal, start the Vite dev server (frontend):
 
-**Admin Account:**
-- Email: `admin@company.com`
-- Password: `admin123`
+```bash
+pnpm dev
+```
 
-**Test User Account:**
-- Email: `john.doe@company.com`
-- Password: `user123`
+- Frontend: http://localhost:8080
+- API: http://localhost:3001
+- Vite proxy forwards calls from `/api/*` to the API server.
+
+### Build & Production
+
+```bash
+pnpm build
+pnpm start
+```
 
 ## Project Structure
 
-\`\`\`
-├── app/                    # Next.js app directory
-│   ├── api/               # API routes
-│   ├── auth/              # Authentication pages
-│   ├── admin/             # Admin dashboard
-│   └── user/              # User dashboard
-├── components/            # Reusable UI components
-├── lib/                   # Utility functions and configurations
-├── scripts/               # Database setup scripts
-└── types/                 # TypeScript type definitions
-\`\`\`
+```
+client/                   # React SPA frontend
+  pages/                  # Route components
+  components/             # UI components
+  global.css              # Tailwind styles
+server/                   # Express API backend
+  index.ts                # Express app + routes registration
+  dev.ts                  # Dev entry (PORT 3001)
+  db.ts                   # Mongoose connection
+  models/                 # Mongoose models (User, Ticket)
+  routes/                 # API handlers (users, tickets-db, demo, tickets)
+shared/                   # Shared types across client & server
+  api.ts
+```
 
 ## API Endpoints
 
-### Authentication
-- `POST /api/auth/admin/login` - Admin login
-- `POST /api/auth/user/login` - User login
-- `GET /api/auth/admin/users` - Get all users (admin only)
-- `POST /api/auth/admin/users` - Create user (admin only)
-- `PUT /api/auth/admin/users/[id]` - Update user (admin only)
-- `DELETE /api/auth/admin/users/[id]` - Delete user (admin only)
+### Users
+- `GET /api/users`
+- `POST /api/users` — body: `{ teamName, email, password, type: "HSV" | "OSV" }`
+- `PUT /api/users/:id` — body: partial update `{ teamName?, email?, password?, type? }`
+- `DELETE /api/users/:id`
+- `POST /api/admin/login` — body: `{ email, password }`
 
-### Tickets
-- `POST /api/tickets/generate` - Generate ticket code
-- `POST /api/tickets/consume` - Consume ticket code
-- `POST /api/tickets/append` - Add tickets to pool
-- `POST /api/tickets/clear` - Clear user's tickets
-- `GET /api/tickets/pools` - Get pool statistics
+### Tickets (MongoDB-backed)
+- `GET /api/db/tickets/available`
+  - Response: `{ available: string[], counts: { HSV: number, OSV: number, Common: number } }`
+- `POST /api/db/tickets/import`
+  - Body: `{ items: [{ code: string, pool: "HSV" | "OSV" | "Common" }, ...] }`
+  - Response: `{ inserted: number }`
+- `POST /api/db/tickets/delete`
+  - Body: `{ codes: string[] }`
+  - Response: `{ deleted: number }`
+- `POST /api/db/tickets/consume`
+  - Body: `{ code: string, userId?: string }`
+  - Response: `{ removed: boolean, availableCount: number, reason?: string }`
+- `POST /api/db/tickets/append`
+  - Body: `{ code: string }`
+  - Response: `{ added: boolean, availableCount: number, reason?: string }`
+- `POST /api/db/tickets/next`
+  - Body: `{ userType: "HSV" | "OSV" | "Common", userId?: string }`
+  - Response: `{ code: string, availableCount: number }`
 
-### History
-- `GET /api/history` - Get activity history
-- `GET /api/history/stats` - Get activity statistics
+### Legacy (in-memory demo)
+- `GET /api/ping`
+- `GET /api/demo`
+- `GET /api/tickets/generate`
+- `POST /api/tickets/consume`
+- `POST /api/tickets/append`
+- `GET /api/tickets/available`
 
-## Database Schema
+## Notes
 
-### Tables
-- `admin_users` - Administrator accounts
-- `users` - Team member accounts with HSV/OSV types
-- `ticket_pools` - Available ticket codes by account type
-- `activity_history` - Audit trail of all actions
+- The frontend currently uses localStorage for some flows. You can migrate UI calls to the MongoDB-backed endpoints above to make all data persistent and multi-user safe.
+- The Vite dev proxy is configured in `vite.config.ts`.
 
-## Development
+## Scripts
 
-### Running Tests
-\`\`\`bash
-npm run test
-# or
-pnpm test
-\`\`\`
+```bash
+pnpm dev        # Start Vite dev server (frontend)
+pnpm dev:server # Start Express API server on :3001
+pnpm build      # Build client and server
+pnpm start      # Start production server
+pnpm typecheck  # TypeScript validation
+pnpm test       # Vitest
+```
 
-### Building for Production
-\`\`\`bash
-npm run build
-npm start
-# or
-pnpm build
-pnpm start
-\`\`\`
+## License
 
-## Deployment
+MIT
 
-This project is optimized for deployment on Vercel with Supabase:
+This project is optimized for deployment on Vercel with MongoDB:
 
 1. Push your code to GitHub
 2. Connect your repository to Vercel

@@ -9,7 +9,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -106,6 +105,7 @@ export default function Index() {
   // Generated code dialog
   const [dialogOpen, setDialogOpen] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
+  const [availableCodes, setAvailableCodes] = useState<string[]>([]);
 
   // Section 2 state
   const [submitCode, setSubmitCode] = useState("");
@@ -143,9 +143,16 @@ export default function Index() {
         const gen = genRaw ? JSON.parse(genRaw) : [];
         const sub = subRaw ? JSON.parse(subRaw) : [];
         const clr = clrRaw ? JSON.parse(clrRaw) : [];
-        setGenHistory([...gen].sort((a, b) => String(b.date).localeCompare(String(a.date))));
-        setSubmitHistory([...sub].sort((a, b) => String(b.date).localeCompare(String(a.date))));
-        setClearedHistory([...clr].sort((a, b) => String(b.date).localeCompare(String(a.date))));
+        const uid = (typeof window !== "undefined" && sessionStorage.getItem("currentUser")
+          ? JSON.parse(String(sessionStorage.getItem("currentUser"))).id
+          : null) as string | null;
+        const onlyMine = (list: any[]) =>
+          Array.isArray(list)
+            ? list.filter((e) => e && typeof e === "object" && e.userId && uid && e.userId === uid)
+            : [];
+        setGenHistory([...onlyMine(gen)].sort((a, b) => String(b.date).localeCompare(String(a.date))));
+        setSubmitHistory([...onlyMine(sub)].sort((a, b) => String(b.date).localeCompare(String(a.date))));
+        setClearedHistory([...onlyMine(clr)].sort((a, b) => String(b.date).localeCompare(String(a.date))));
       } catch {}
     }
     fetchHistory();
@@ -170,61 +177,65 @@ export default function Index() {
     [confirmCode]
   );
 
-  const handleGetCode = useCallback(async () => {
+  const handleGenerate = useCallback(async () => {
     if (!teamMember || !country) {
       toast({ title: "Please enter Team member and Country" });
       return;
     }
     if (!regionInfo.apiRegion) {
-      toast({
-        title: "Unsupported country",
-        description:
-          "Enter USA, Canada, Mexico, Cuba, UK, Germany, Italy, France, India, China, Singapore, or Thailand",
-      });
+      toast({ title: "Unsupported country" });
       return;
     }
-
-    if (!currentUser || !currentUser.type) {
-      toast({
-        title: "User type not found",
-        description: "Please contact admin to set your account type",
-      });
-      return;
-    }
-
     try {
-      const res = await fetch(
-        `/api/tickets/generate?region=${encodeURIComponent(
-          regionInfo.apiRegion
-        )}&type=${encodeURIComponent(currentUser.type)}`
-      );
-      if (!res.ok) throw new Error("No tickets available");
-      const data = (await res.json()) as { code: string };
-      const code = data.code;
-      try {
-        await fetch("/api/tickets/consume", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code, userType: currentUser.type }),
-        });
-      } catch {}
-      setGeneratedCode(code);
-      const newEntry = {
-        teamMember,
-        country,
-        date: new Date().toISOString(),
-        code,
-      };
-      setGenHistory((prev) => {
-        const next = [newEntry, ...prev];
-        try { localStorage.setItem("app.ekcode_generated", JSON.stringify(next)); } catch {}
-        return next;
+      const res = await fetch('/api/db/tickets/next', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userType: (currentUser?.type as 'HSV' | 'OSV') || 'HSV', userId: currentUser?.id })
       });
+      if (!res.ok) {
+        toast({ title: "No Ek-codes available" });
+        return;
+      }
+      const data = await res.json() as { code: string };
+      // Record selection locally for history and assignment tracking
+      await onSelectCode(data.code);
       setDialogOpen(true);
     } catch {
-      toast({ title: `All ${currentUser.type} Ek-codes have been used 😢` });
+      toast({ title: "Could not get Ek-code from server" });
     }
-  }, [teamMember, country, regionInfo.apiRegion, currentUser, toast]);
+  }, [teamMember, country, currentUser, regionInfo.apiRegion, toast]);
+
+  const onSelectCode = useCallback(async (code: string) => {
+    let selectedPool: "HSV" | "OSV" | "Common" | null = (currentUser?.type as any) || "HSV";
+    setGeneratedCode(code);
+    const newEntry = { teamMember, country, date: new Date().toISOString(), code, userId: currentUser?.id } as any;
+    setGenHistory((prev) => {
+      const next = [newEntry, ...prev];
+      try { localStorage.setItem("app.ekcode_generated", JSON.stringify(next)); } catch {}
+      return next;
+    });
+    // Best-effort server history
+    try {
+      fetch('/api/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'generated', userId: currentUser?.id, teamMember, country, code })
+      }).catch(() => {});
+    } catch {}
+    // Track assigned codes by user
+    try {
+      const mapRaw = localStorage.getItem("app.assigned_by_user");
+      const map = mapRaw ? (JSON.parse(mapRaw) as Record<string, Array<string | { code: string; section: string }>>) : {};
+      const uid = currentUser?.id as string;
+      const list = Array.isArray(map[uid]) ? map[uid] : [];
+      const exists = list.some((c) => (typeof c === "string" ? c === code : c?.code === code));
+      if (!exists) list.unshift({ code, section: (typeof window !== "undefined" ? (selectedPool || currentUser?.type || "HSV") : "HSV") });
+      map[uid] = list;
+      localStorage.setItem("app.assigned_by_user", JSON.stringify(map));
+    } catch {}
+    // hide selection list
+    setAvailableCodes([]);
+  }, [currentUser, teamMember, country]);
 
   const handleCopyAndClose = useCallback(async () => {
     if (!generatedCode) return;
@@ -257,35 +268,74 @@ export default function Index() {
     }
     const code = submitCode;
     try {
-      const res = await fetch("/api/tickets/append", {
+      // Return the code to available in DB
+      await fetch("/api/db/tickets/append", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code }),
       });
-      const data = await res.json();
-      if (data.added) {
-        const newEntry = {
-          teamMember,
-          date: new Date().toISOString(),
-          code,
-          comments: submitComments || undefined,
-        };
-        setSubmitHistory((prev) => {
-          const next = [newEntry, ...prev];
-          try { localStorage.setItem("app.ekcode_submitted", JSON.stringify(next)); } catch {}
-          return next;
-        });
-        toast({ title: "Ek-code sent back successfully to use again" });
-      } else if (data.reason === "already_available") {
-        toast({ title: "This Ek-Code is already available" });
-      } else if (data.reason === "unknown_code") {
-        toast({ title: "Ek-code doesn't exist ❌" });
-      } else {
-        toast({ title: "Error", description: "Could not add ticket" });
+    } catch {}
+
+    // Always record history locally and restore to pools
+    const newEntry = {
+      teamMember,
+      date: new Date().toISOString(),
+      code,
+      comments: submitComments || undefined,
+      userId: currentUser?.id,
+    };
+    setSubmitHistory((prev) => {
+      const next = [newEntry, ...prev];
+      try { localStorage.setItem("app.ekcode_submitted", JSON.stringify(next)); } catch {}
+      return next;
+    });
+    // Best-effort server history
+    try {
+      fetch('/api/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'submitted', userId: currentUser?.id, teamMember, code, comments: submitComments })
+      }).catch(() => {});
+    } catch {}
+    // Restore to correct pool locally (based on stored section or used pools)
+    try {
+      const ticketsRaw = localStorage.getItem("app.tickets");
+      if (ticketsRaw) {
+        const t = JSON.parse(ticketsRaw) as any;
+        // Determine section from assigned_by_user map
+        let target: "HSV" | "OSV" | "Common" | null = null;
+        try {
+          const mapRaw = localStorage.getItem("app.assigned_by_user");
+          const map = mapRaw ? (JSON.parse(mapRaw) as Record<string, Array<string | { code: string; section: string }>>) : {};
+          const uid = currentUser?.id as string;
+          const list = Array.isArray(map[uid]) ? map[uid] : [];
+          const found = list.find((c) => (typeof c === "string" ? c === code : c?.code === code));
+          target = typeof found === "string" ? null : (found?.section as any) || null;
+        } catch {}
+        if (!target) {
+          // Fallback: check which used pool contains the code
+          if (Array.isArray(t.Common?.used) && t.Common.used.includes(code)) target = "Common";
+          else if (Array.isArray(t.HSV?.used) && t.HSV.used.includes(code)) target = "HSV";
+          else if (Array.isArray(t.OSV?.used) && t.OSV.used.includes(code)) target = "OSV";
+        }
+        if (target) {
+          t[target].used = Array.isArray(t[target].used) ? t[target].used.filter((c: string) => c !== code) : [];
+          t[target].available = Array.isArray(t[target].available) ? t[target].available : [];
+          if (!t[target].available.includes(code)) t[target].available.unshift(code);
+          localStorage.setItem("app.tickets", JSON.stringify(t));
+        }
       }
-    } catch {
-      toast({ title: "Error", description: "Could not add ticket" });
-    }
+    } catch {}
+    // Remove from assigned list for current user
+    try {
+      const mapRaw = localStorage.getItem("app.assigned_by_user");
+      const map = mapRaw ? (JSON.parse(mapRaw) as Record<string, Array<string | { code: string; section: string }>>) : {};
+      const uid = currentUser?.id as string;
+      const list = Array.isArray(map[uid]) ? map[uid] : [];
+      map[uid] = list.filter((c) => (typeof c === "string" ? c !== code : c?.code !== code));
+      localStorage.setItem("app.assigned_by_user", JSON.stringify(map));
+    } catch {}
+    toast({ title: "Ek-code sent back successfully to use again" });
     setSubmitCode("");
     setSubmitComments("");
   }, [inputValid, submitCode, submitComments, teamMember, toast]);
@@ -301,30 +351,66 @@ export default function Index() {
     if (!clearanceId) return;
     const code = confirmCode;
     try {
-      const res = await fetch("/api/tickets/append", {
+      // Return the code to available in DB
+      await fetch("/api/db/tickets/append", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code }),
       });
-      const data = await res.json();
-      if (data.added) {
-        const newEntry = { date: new Date().toISOString(), code, clearanceId };
-        setClearedHistory((prev) => {
-          const next = [newEntry, ...prev];
-          try { localStorage.setItem("app.ekcode_cleared", JSON.stringify(next)); } catch {}
-          return next;
-        });
-        toast({ title: "Ek-code sent back successfully to use again" });
-      } else if (data.reason === "already_available") {
-        toast({ title: "This Ek-Code is already available" });
-      } else if (data.reason === "unknown_code") {
-        toast({ title: "Ek-code doesn't exist ❌" });
-      } else {
-        toast({ title: "Error", description: "Could not restore ticket" });
+    } catch {}
+
+    // Always record history locally and restore to pools
+    const newEntry = { date: new Date().toISOString(), code, clearanceId, userId: currentUser?.id } as any;
+    setClearedHistory((prev) => {
+      const next = [newEntry, ...prev];
+      try { localStorage.setItem("app.ekcode_cleared", JSON.stringify(next)); } catch {}
+      return next;
+    });
+    // Best-effort server history
+    try {
+      fetch('/api/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'cleared', userId: currentUser?.id, code, clearanceId })
+      }).catch(() => {});
+    } catch {}
+    // Restore to correct pool locally (based on stored section or used pools)
+    try {
+      const ticketsRaw = localStorage.getItem("app.tickets");
+      if (ticketsRaw) {
+        const t = JSON.parse(ticketsRaw) as any;
+        let target: "HSV" | "OSV" | "Common" | null = null;
+        try {
+          const mapRaw = localStorage.getItem("app.assigned_by_user");
+          const map = mapRaw ? (JSON.parse(mapRaw) as Record<string, Array<string | { code: string; section: string }>>) : {};
+          const uid = currentUser?.id as string;
+          const list = Array.isArray(map[uid]) ? map[uid] : [];
+          const found = list.find((c) => (typeof c === "string" ? c === code : c?.code === code));
+          target = typeof found === "string" ? null : (found?.section as any) || null;
+        } catch {}
+        if (!target) {
+          if (Array.isArray(t.Common?.used) && t.Common.used.includes(code)) target = "Common";
+          else if (Array.isArray(t.HSV?.used) && t.HSV.used.includes(code)) target = "HSV";
+          else if (Array.isArray(t.OSV?.used) && t.OSV.used.includes(code)) target = "OSV";
+        }
+        if (target) {
+          t[target].used = Array.isArray(t[target].used) ? t[target].used.filter((c: string) => c !== code) : [];
+          t[target].available = Array.isArray(t[target].available) ? t[target].available : [];
+          if (!t[target].available.includes(code)) t[target].available.unshift(code);
+          localStorage.setItem("app.tickets", JSON.stringify(t));
+        }
       }
-    } catch {
-      toast({ title: "Error", description: "Could not restore ticket" });
-    }
+    } catch {}
+    // Remove from assigned list for current user
+    try {
+      const mapRaw = localStorage.getItem("app.assigned_by_user");
+      const map = mapRaw ? (JSON.parse(mapRaw) as Record<string, Array<string | { code: string; section: string }>>) : {};
+      const uid = currentUser?.id as string;
+      const list = Array.isArray(map[uid]) ? map[uid] : [];
+      map[uid] = list.filter((c) => (typeof c === "string" ? c !== code : c?.code !== code));
+      localStorage.setItem("app.assigned_by_user", JSON.stringify(map));
+    } catch {}
+    toast({ title: "Ek-code sent back successfully to use again" });
     setConfirmCode("");
     setClearanceId("");
   }, [confirmValid, confirmCode, clearanceId, toast]);
@@ -340,18 +426,11 @@ export default function Index() {
       </div>
       <div className="mb-8 text-center">
         <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight bg-gradient-to-r from-primary to-fuchsia-500 bg-clip-text text-transparent">
-          Get your Ek-Code
+          {currentUser ? `Hi ${currentUser.teamName}, Get your Ek-Code for your team` : "Get your Ek-Code"}
         </h1>
         <p className="mt-2 text-muted-foreground">
           Manage Ek-Codes across regions in simple steps
         </p>
-        {currentUser && (
-          <div className="mt-2">
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary/10 text-primary">
-              Account Type: {currentUser.type} | Team: {currentUser.teamName}
-            </span>
-          </div>
-        )}
       </div>
 
       <div className="grid gap-6 md:gap-8 md:grid-cols-3">
@@ -398,7 +477,7 @@ export default function Index() {
               </div>
             </div>
             <div>
-              <Button className="w-full" onClick={handleGetCode}>
+              <Button className="w-full" onClick={handleGenerate}>
                 Get code
               </Button>
             </div>
@@ -579,20 +658,36 @@ export default function Index() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Code generated ✅</DialogTitle>
-            <DialogDescription>
-              Your Ek-Code is ready. Tap copy to use it.
-            </DialogDescription>
+            <DialogTitle>Generated Ek-Code</DialogTitle>
+            <DialogDescription>Copy and keep it safe</DialogDescription>
           </DialogHeader>
-          <div className="flex items-center justify-between gap-3">
-            <div className="font-mono text-lg tracking-widest">
-              {generatedCode}
+          {(!generatedCode && availableCodes.length > 0) ? (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">Select an Ek-code to use for your team:</p>
+              <div className="max-h-[300px] overflow-auto grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {availableCodes.map((c) => (
+                  <Button key={c} variant="outline" onClick={() => onSelectCode(c)} className="font-mono">
+                    {c}
+                  </Button>
+                ))}
+              </div>
+              <div className="flex justify-end">
+                <Button variant="ghost" onClick={() => setDialogOpen(false)}>Close</Button>
+              </div>
             </div>
-            <Button onClick={handleCopyAndClose} aria-label="Copy Ek-Code">
-              Copy
-            </Button>
-          </div>
-          <DialogFooter />
+          ) : (
+            <div className="text-center">
+              <div className="text-3xl font-mono font-bold tracking-wider select-all">
+                {generatedCode || "---------"}
+              </div>
+              <div className="mt-4 flex gap-2 justify-center">
+                <Button onClick={handleCopyAndClose}>Copy & Close</Button>
+                <Button variant="outline" onClick={() => setDialogOpen(false)}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </main>

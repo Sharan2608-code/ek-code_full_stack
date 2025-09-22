@@ -65,6 +65,7 @@
     "less": "latest",
     "lightningcss": "latest",
     "lucide-react": "^0.454.0",
+    "mongoose": "^8.18.1",
     "next-themes": "latest",
     "path": "latest",
     "react": "^18",

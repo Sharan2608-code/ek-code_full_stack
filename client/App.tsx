@@ -19,10 +19,7 @@ export default function App() {
       <TooltipProvider>
         <Toaster />
         <BrowserRouter>
-          <div className="min-h-screen flex flex-col bg-[radial-gradient(1200px_600px_at_50%_-100px,#6366f1_8%,transparent)]">
-            <header className="border-b bg-background/60 backdrop-blur supports-[backdrop-filter]:bg-background/50 sticky top-0 z-40">
-              <div className="container h-14 flex items-center justify-center" />
-            </header>
+          <div className="min-h-screen flex flex-col">
             <div className="flex-1">
               <Routes>
                 <Route path="/login" element={<Login />} />
