@@ -1,7 +1,16 @@
+// Users route handlers: CRUD operations for teams/users and admin login.
+// Imports:
+// - RequestHandler: Express handler type
+// - UserModel: Mongoose model for users
+// - bcrypt: password hashing/verification
 import type { RequestHandler } from "express";
 import { UserModel } from "../models/User";
 import bcrypt from "bcryptjs";
 
+/**
+ * GET /api/users
+ * Returns a list of users (teams) with minimal safe fields.
+ */
 export const listUsers: RequestHandler = async (_req, res) => {
   const users = await UserModel.find().sort({ createdAt: -1 }).lean();
   res.json(
@@ -9,6 +18,11 @@ export const listUsers: RequestHandler = async (_req, res) => {
   );
 };
 
+/**
+ * POST /api/users
+ * Creates a new user/team. Requires teamName, email, password.
+ * Responds 409 if email already exists.
+ */
 export const createUser: RequestHandler = async (req, res) => {
   const { teamName, email, password, type } = req.body || {};
   if (!teamName || !email || !password) return res.status(400).json({ error: "missing_fields" });
@@ -19,6 +33,10 @@ export const createUser: RequestHandler = async (req, res) => {
   res.status(201).json({ id: String(doc._id), teamName: doc.teamName, email: doc.email, type: doc.type });
 };
 
+/**
+ * PUT /api/users/:id
+ * Updates team fields. Password is re-hashed if provided.
+ */
 export const updateUser: RequestHandler = async (req, res) => {
   const { id } = req.params;
   const { teamName, email, password, type } = req.body || {};
@@ -32,6 +50,10 @@ export const updateUser: RequestHandler = async (req, res) => {
   res.json({ id: String(doc._id), teamName: doc.teamName, email: doc.email, type: doc.type });
 };
 
+/**
+ * DELETE /api/users/:id
+ * Deletes a user/team by id.
+ */
 export const deleteUser: RequestHandler = async (req, res) => {
   const { id } = req.params;
   const doc = await UserModel.findByIdAndDelete(id);
@@ -39,10 +61,22 @@ export const deleteUser: RequestHandler = async (req, res) => {
   res.json({ ok: true });
 };
 
+/**
+ * POST /api/admin/login
+ * Authenticates admin or team by email/teamName and password.
+ * Returns basic user profile on success.
+ */
 export const adminLogin: RequestHandler = async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: "missing_fields" });
-  const user = await UserModel.findOne({ email: String(email).toLowerCase().trim() });
+  const uname = String(email).trim();
+  const emailLower = uname.toLowerCase();
+  const user = await UserModel.findOne({
+    $or: [
+      { email: emailLower },
+      { teamName: { $regex: new RegExp(`^${uname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") } },
+    ],
+  });
   if (!user) return res.status(401).json({ error: "invalid_credentials" });
   const ok = await bcrypt.compare(String(password), user.passwordHash);
   if (!ok) return res.status(401).json({ error: "invalid_credentials" });

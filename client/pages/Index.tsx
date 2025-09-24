@@ -1,6 +1,10 @@
+// Index (User) page: allows a team member to request an Ek-code, submit back
+// an unused code, or confirm a cleared code. Persists minimal history locally
+// and best-effort to the server.
 "use client";
 
 import { useCallback, useMemo, useState, useEffect } from "react";
+// UI imports and React utils
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -21,6 +25,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 
+// copyToClipboard: tries modern Clipboard API and falls back to a hidden textarea
 async function copyToClipboard(text: string) {
   try {
     if (
@@ -47,6 +52,7 @@ async function copyToClipboard(text: string) {
   }
 }
 
+// formatPrettyDate: returns a human-friendly date (e.g., 1st january 2025)
 function formatPrettyDate(input: string | Date) {
   const d = typeof input === "string" ? new Date(input) : input;
   if (Number.isNaN(d.getTime())) return String(input);
@@ -78,6 +84,7 @@ function formatPrettyDate(input: string | Date) {
   return `${day}${suffix(day)} ${month} ${year}`;
 }
 
+// detectRegion: rough country→region mapping used for display only
 function detectRegion(countryInput: string): {
   apiRegion: "NA" | "EU" | "FE" | "";
   display: "NA" | "EU" | "Asia" | "";
@@ -93,6 +100,8 @@ function detectRegion(countryInput: string): {
   return { apiRegion: "", display: "" };
 }
 
+// Exported page component for end users (teams). Contains three sections:
+// 1) Generate Ek-code, 2) Submit back, 3) Cleared and returned.
 export default function Index() {
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -101,6 +110,7 @@ export default function Index() {
   const [teamMember, setTeamMember] = useState("");
   const [country, setCountry] = useState("");
   const regionInfo = detectRegion(country);
+  const [selectedType, setSelectedType] = useState<"HSV" | "OSV" | "Common">("HSV");
 
   // Generated code dialog
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -133,6 +143,20 @@ export default function Index() {
   const [submitHistory, setSubmitHistory] = useState<SubmitHistory[]>([]);
   const [clearedHistory, setClearedHistory] = useState<ClearedHistory[]>([]);
 
+  // Helper to deduplicate history entries (by type+code+date+clearanceId)
+  function uniqHistory<T extends { code: string; date: string; clearanceId?: string }>(list: T[]): T[] {
+    const seen = new Set<string>();
+    const out: T[] = [];
+    for (const it of list) {
+      const key = `${it.code}|${it.date}|${it.clearanceId || ''}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(it);
+      }
+    }
+    return out;
+  }
+
   // Load history from localStorage on mount
   useEffect(() => {
     async function fetchHistory() {
@@ -150,9 +174,9 @@ export default function Index() {
           Array.isArray(list)
             ? list.filter((e) => e && typeof e === "object" && e.userId && uid && e.userId === uid)
             : [];
-        setGenHistory([...onlyMine(gen)].sort((a, b) => String(b.date).localeCompare(String(a.date))));
-        setSubmitHistory([...onlyMine(sub)].sort((a, b) => String(b.date).localeCompare(String(a.date))));
-        setClearedHistory([...onlyMine(clr)].sort((a, b) => String(b.date).localeCompare(String(a.date))));
+        setGenHistory(uniqHistory([...onlyMine(gen)]).sort((a, b) => String(b.date).localeCompare(String(a.date))));
+        setSubmitHistory(uniqHistory([...onlyMine(sub)]).sort((a, b) => String(b.date).localeCompare(String(a.date))));
+        setClearedHistory(uniqHistory([...onlyMine(clr)]).sort((a, b) => String(b.date).localeCompare(String(a.date))));
       } catch {}
     }
     fetchHistory();
@@ -177,6 +201,8 @@ export default function Index() {
     [confirmCode]
   );
 
+  // handleGenerate: asks server for next available code based on team type
+  // and records it locally for quick UI feedback.
   const handleGenerate = useCallback(async () => {
     if (!teamMember || !country) {
       toast({ title: "Please enter Team member and Country" });
@@ -190,7 +216,7 @@ export default function Index() {
       const res = await fetch('/api/db/tickets/next', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userType: (currentUser?.type as 'HSV' | 'OSV') || 'HSV', userId: currentUser?.id })
+        body: JSON.stringify({ userType: selectedType, userId: currentUser?.id })
       });
       if (!res.ok) {
         toast({ title: "No Ek-codes available" });
@@ -205,12 +231,13 @@ export default function Index() {
     }
   }, [teamMember, country, currentUser, regionInfo.apiRegion, toast]);
 
+  // onSelectCode: updates local state/history when a code is selected
   const onSelectCode = useCallback(async (code: string) => {
     let selectedPool: "HSV" | "OSV" | "Common" | null = (currentUser?.type as any) || "HSV";
     setGeneratedCode(code);
     const newEntry = { teamMember, country, date: new Date().toISOString(), code, userId: currentUser?.id } as any;
     setGenHistory((prev) => {
-      const next = [newEntry, ...prev];
+      const next = uniqHistory([newEntry, ...prev]);
       try { localStorage.setItem("app.ekcode_generated", JSON.stringify(next)); } catch {}
       return next;
     });
@@ -237,6 +264,7 @@ export default function Index() {
     setAvailableCodes([]);
   }, [currentUser, teamMember, country]);
 
+  // handleCopyAndClose: copies current code to clipboard and closes dialog
   const handleCopyAndClose = useCallback(async () => {
     if (!generatedCode) return;
     const ok = await copyToClipboard(generatedCode);
@@ -250,6 +278,7 @@ export default function Index() {
     setDialogOpen(false);
   }, [generatedCode, toast]);
 
+  // onLogout: clears session flags and redirects to login
   const onLogout = useCallback(() => {
     try {
       sessionStorage.removeItem("auth");
@@ -258,6 +287,8 @@ export default function Index() {
     navigate("/login", { replace: true });
   }, [navigate]);
 
+  // onSubmitSection2: submit back an unused code. Restores code to DB available pool
+  // and records history locally and best-effort to server.
   const onSubmitSection2 = useCallback(async () => {
     if (!inputValid) {
       toast({
@@ -285,7 +316,7 @@ export default function Index() {
       userId: currentUser?.id,
     };
     setSubmitHistory((prev) => {
-      const next = [newEntry, ...prev];
+      const next = uniqHistory([newEntry, ...prev]);
       try { localStorage.setItem("app.ekcode_submitted", JSON.stringify(next)); } catch {}
       return next;
     });
@@ -340,6 +371,8 @@ export default function Index() {
     setSubmitComments("");
   }, [inputValid, submitCode, submitComments, teamMember, toast]);
 
+  // onSubmitSection3: confirm a cleared code. Restores code to DB available pool
+  // and records history locally and best-effort to server.
   const onSubmitSection3 = useCallback(async () => {
     if (!confirmValid) {
       toast({
@@ -362,7 +395,7 @@ export default function Index() {
     // Always record history locally and restore to pools
     const newEntry = { date: new Date().toISOString(), code, clearanceId, userId: currentUser?.id } as any;
     setClearedHistory((prev) => {
-      const next = [newEntry, ...prev];
+      const next = uniqHistory([newEntry, ...prev]);
       try { localStorage.setItem("app.ekcode_cleared", JSON.stringify(next)); } catch {}
       return next;
     });
@@ -475,6 +508,23 @@ export default function Index() {
                   disabled
                 />
               </div>
+              <div className="space-y-2 sm:col-span-2">
+                <label className="text-sm font-medium">Select Type</label>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="radio" name="ekType" value="HSV" checked={selectedType === 'HSV'} onChange={() => setSelectedType('HSV')} />
+                    HSV
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="radio" name="ekType" value="OSV" checked={selectedType === 'OSV'} onChange={() => setSelectedType('OSV')} />
+                    OSV
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="radio" name="ekType" value="Common" checked={selectedType === 'Common'} onChange={() => setSelectedType('Common')} />
+                    Common
+                  </label>
+                </div>
+              </div>
             </div>
             <div>
               <Button className="w-full" onClick={handleGenerate}>
@@ -575,7 +625,10 @@ export default function Index() {
               {genHistory.length ? (
                 <ul className="space-y-2 text-sm">
                   {genHistory.map((h, i) => (
-                    <li key={i} className="border rounded p-3 leading-relaxed">
+                    <li
+                      key={i}
+                      className={"border rounded p-3 leading-relaxed"}
+                    >
                       <span className="font-medium">{h.teamMember}</span> has
                       generated the Ek-code{" "}
                       <span className="px-1.5 py-0.5 rounded bg-accent font-mono font-semibold">
@@ -600,7 +653,10 @@ export default function Index() {
               {submitHistory.length ? (
                 <ul className="space-y-2 text-sm">
                   {submitHistory.map((h, i) => (
-                    <li key={i} className="border rounded p-3 leading-relaxed">
+                    <li
+                      key={i}
+                      className={"border rounded p-3 leading-relaxed"}
+                    >
                       <span className="font-medium">
                         {h.teamMember || "A team member"}
                       </span>{" "}
@@ -632,7 +688,10 @@ export default function Index() {
               {clearedHistory.length ? (
                 <ul className="space-y-2 text-sm">
                   {clearedHistory.map((h, i) => (
-                    <li key={i} className="border rounded p-3 leading-relaxed">
+                    <li
+                      key={i}
+                      className={"border rounded p-3 leading-relaxed"}
+                    >
                       Cleared EK-code{" "}
                       <span className="px-1.5 py-0.5 rounded bg-accent font-mono font-semibold">
                         {h.code}

@@ -1,6 +1,15 @@
+// History routes: record user/admin actions and list them for dashboards.
+// Imports:
+// - RequestHandler: Express handler type
+// - HistoryModel: Mongoose model for history entries
 import type { RequestHandler } from "express";
 import { HistoryModel } from "../models/History";
 
+/**
+ * POST /api/history
+ * Body: { type: 'generated'|'submitted'|'cleared', userId?, teamMember?, code, country?, comments?, clearanceId?, date? }
+ * Creates a new history document. Date defaults to now.
+ */
 export const addHistory: RequestHandler = async (req, res) => {
   try {
     const { type, userId, teamMember, code, country, comments, clearanceId, date } = req.body || {};
@@ -15,12 +24,16 @@ export const addHistory: RequestHandler = async (req, res) => {
       clearanceId: clearanceId || undefined,
       date: date ? new Date(date) : new Date(),
     });
-    res.status(201).json({ id: String(doc._id) });
+    res.status(201).json({ id: String(doc._id) }); // Return created id for reference
   } catch (e) {
     res.status(500).json({ error: "server_error" });
   }
 };
 
+/**
+ * GET /api/history?type=&userId=&limit=
+ * Returns history rows filtered by type and/or userId, sorted newest-first.
+ */
 export const listHistory: RequestHandler = async (req, res) => {
   try {
     const { type, userId, limit } = req.query as { type?: string; userId?: string; limit?: string };

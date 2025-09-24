@@ -1,9 +1,18 @@
+// Server entry: configures Express app, connects to DB, and registers API routes.
+// Imports:
+// - dotenv/config: loads environment variables from .env
+// - express: HTTP server framework
+// - cors: enables Cross-Origin Resource Sharing
+// - path: path utilities for serving static files in production
+// - handleDemo: example demo route
+// - connectDB: initializes MongoDB connection (non-blocking)
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import path from "path";
 import { handleDemo } from "./routes/demo";
 import { connectDB } from "./db";
+// User routes: CRUD + admin login
 import {
   listUsers,
   createUser,
@@ -11,6 +20,7 @@ import {
   deleteUser,
   adminLogin,
 } from "./routes/users";
+// Ticket routes: MongoDB-backed ticket pool operations
 import {
   listAvailableDb,
   importTickets,
@@ -19,17 +29,20 @@ import {
   appendTicketDb,
   nextTicketDb,
 } from "./routes/tickets-db";
+// History routes: record and query user/admin actions
 import { addHistory, listHistory } from "./routes/history";
 
+// createServer(): builds and returns an Express app instance configured
+// with middleware, DB connection, and API endpoints.
 export function createServer() {
   const app = express();
 
-  // Middleware
+  // Middleware: CORS + JSON/urlencoded body parsing
   app.use(cors());
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
-  // Initialize DB connection (non-blocking)
+  // Initialize DB connection (non-blocking). Errors are logged.
   connectDB().catch((err) => console.error("[DB] connection failed", err));
 
   // Example API routes
@@ -61,7 +74,7 @@ export function createServer() {
   app.get("/api/history", listHistory);
   app.post("/api/history", addHistory);
 
-  // Serve static files in production
+  // Serve static files in production: Vite-built client assets
   if (process.env.NODE_ENV === "production") {
     app.use(express.static(path.join(__dirname, "../client")));
     app.get("*", (_req, res) => {
@@ -72,7 +85,8 @@ export function createServer() {
   return app;
 }
 
-// Start the server directly when running in production
+// When NODE_ENV=production and this file is executed directly,
+// start listening on the configured port.
 if (process.env.NODE_ENV === "production") {
   const port = process.env.PORT || 8080;
   const app = createServer();

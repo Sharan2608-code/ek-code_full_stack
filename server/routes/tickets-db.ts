@@ -1,8 +1,18 @@
+// Ticket DB routes: manage Ek-code tickets in MongoDB.
+// - listAvailableDb: list all available tickets (with pool breakdown)
+// - importTickets: upsert a list of tickets as available
+// - deleteTickets: remove tickets that are currently available
+// - consumeTicketDb: mark a specific code as used (assigned)
+// - appendTicketDb: return a code to available
+// - nextTicketDb: atomically get the next available code by preferred pools
 import type { RequestHandler } from "express";
 import { TicketModel, TicketPool } from "../models/Ticket";
 
 const CODE_RE = /^[A-Z0-9]{10}$/;
 
+/** GET /api/db/tickets/available
+ * Response: { available: string[], counts: {HSV,OSV,Common}, byPool: {...} }
+ */
 export const listAvailableDb: RequestHandler = async (_req, res) => {
   const docs = await TicketModel.find({ status: "available" }).lean();
   const list = docs as any[];
@@ -21,6 +31,10 @@ export const listAvailableDb: RequestHandler = async (_req, res) => {
   });
 };
 
+/** POST /api/db/tickets/import
+ * Body: { items: Array<{ code: string; pool: TicketPool }> }
+ * Upserts tickets (idempotent) as available. Returns number inserted.
+ */
 export const importTickets: RequestHandler = async (req, res) => {
   const { items } = (req.body || {}) as { items?: Array<{ code: string; pool: TicketPool }> };
   if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: "no_items" });
@@ -39,6 +53,10 @@ export const importTickets: RequestHandler = async (req, res) => {
   res.json({ inserted: upserts });
 };
 
+/** POST /api/db/tickets/delete
+ * Body: { codes: string[] }
+ * Deletes tickets only if they are currently in available state.
+ */
 export const deleteTickets: RequestHandler = async (req, res) => {
   const { codes } = (req.body || {}) as { codes?: string[] };
   if (!Array.isArray(codes) || codes.length === 0) return res.status(400).json({ error: "no_codes" });
@@ -47,6 +65,10 @@ export const deleteTickets: RequestHandler = async (req, res) => {
   res.json({ deleted: result.deletedCount || 0 });
 };
 
+/** POST /api/db/tickets/consume
+ * Body: { code: string, userId?: string }
+ * Marks code as used if it was available.
+ */
 export const consumeTicketDb: RequestHandler = async (req, res) => {
   const { code, userId } = req.body || {};
   const upper = String(code || "").toUpperCase();
@@ -61,6 +83,10 @@ export const consumeTicketDb: RequestHandler = async (req, res) => {
   return res.json({ removed: true, availableCount: await totalAvailableCountDb() });
 };
 
+/** POST /api/db/tickets/append
+ * Body: { code: string }
+ * Returns code to available state if known.
+ */
 export const appendTicketDb: RequestHandler = async (req, res) => {
   const { code } = req.body || {};
   const upper = String(code || "").toUpperCase();
@@ -75,6 +101,10 @@ export const appendTicketDb: RequestHandler = async (req, res) => {
   return res.json({ added: true, availableCount: await totalAvailableCountDb() });
 };
 
+/** POST /api/db/tickets/next
+ * Body: { userType?: TicketPool, userId?: string }
+ * Preferred pools: Common first, then user's type (HSV/OSV). Returns { code }.
+ */
 export const nextTicketDb: RequestHandler = async (req, res) => {
   const { userType, userId } = (req.body || {}) as { userType?: TicketPool; userId?: string };
   const preferred: TicketPool[] = ["Common", userType === "OSV" ? "OSV" : "HSV"];
@@ -91,6 +121,7 @@ export const nextTicketDb: RequestHandler = async (req, res) => {
   return res.status(404).json({ error: "no_tickets_available" });
 };
 
+// Helper: count total available tickets
 async function totalAvailableCountDb() {
   return TicketModel.countDocuments({ status: "available" });
 }
